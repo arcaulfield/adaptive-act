@@ -1,36 +1,46 @@
 """
-Threshold calibration for the TCT simulation.
+Threshold calibration and q computation for the TCT simulation.
 
-q in the TCT paper (Definition 1) is:
+Key distinction
+---------------
+q and T are INDEPENDENT quantities:
 
-    q = inf_D  Pr_{r ~ B(D)}[r ∈ ⊤]
+  q = 1 / (e^ε + 1)          (Lemma 2.3, Cohen & Lyu 2023)
 
-For the Laplace threshold mechanism (Algorithm 3), with sensitivity-1 queries,
-this becomes the probability that the *noisy* count crosses threshold T:
+    q is a property of the ε-DP mechanism alone. For the Laplace threshold
+    mechanism, the NotPrior target ⊤ = {TRUE} is always a 1/(e^ε+1)-target,
+    regardless of the threshold T or the data distribution. Use q_from_epsilon
+    to compute it.
 
-    q = P(true_count + Lap(1/ε) ≥ T)
+  T = set_threshold_for_hit_rate(...)
 
-minimized over neighboring datasets (worst-case: removing the single highest
-contributor reduces the count by at most 1).
+    T controls what fraction of rounds produce a target hit (the empirical
+    hit rate). This is an application-level choice, NOT related to q.
+    TCT is beneficial when the empirical hit rate << q — i.e., when most
+    rounds output FALSE (⊥). set_threshold_for_hit_rate finds the T that
+    achieves a desired empirical noisy hit rate on the actual population.
 
-Correct calibration must therefore use the NOISY count distribution, not the
-noiseless one. Setting T at the (1−q) quantile of noiseless counts produces a
-q_actual that is 1.6–4.8× larger than intended (the Laplace noise adds extra
-mass above the threshold), inflating K_k and degrading the tightness of H2.
+Usage
+-----
+    from simulation.calibration import q_from_epsilon, set_threshold_for_hit_rate
 
-Usage:
-    from simulation.calibration import calibrate_threshold
-
-    T, q_empirical = calibrate_threshold(
+    q = q_from_epsilon(epsilon)          # e.g. 0.475 for epsilon=0.1
+    T, hit_rate = set_threshold_for_hit_rate(
         population=pop,
-        epsilon=0.1,
-        target_q=0.3,
+        epsilon=epsilon,
+        target_hit_rate=0.05,            # want 5% of rounds to cross T
         n_pilot=2000,
         rng=np.random.default_rng(0),
     )
+    # verify: hit_rate ≈ 0.05, and hit_rate << q
+
+    accountant = AdaptiveTCTAccountant(epsilon=epsilon, delta=delta)
+    # accountant.q == q  (set automatically from epsilon)
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -38,36 +48,60 @@ from .population import UserPopulation
 from .query import compute_round_conversions
 
 
-def calibrate_threshold(
+def q_from_epsilon(epsilon: float) -> float:
+    """
+    Compute q from epsilon via Lemma 2.3 (NotPrior target).
+
+    For any ε-DP mechanism A: X → Y ∪ {⊥}, the set of non-⊥ outcomes Y
+    constitutes a 1/(e^ε + 1)-target. For the Laplace threshold mechanism
+    with ⊥ = FALSE, this gives the hit probability in the private branch:
+
+        q = 1 / (e^ε + 1)
+
+    For small ε, q → 1/2 (overhead factor ≈ 2).
+    For large ε, q decreases (the mechanism is less informative per query).
+    """
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be positive, got {epsilon}")
+    return 1.0 / (math.exp(epsilon) + 1.0)
+
+
+def set_threshold_for_hit_rate(
     population: UserPopulation,
     epsilon: float,
-    target_q: float,
+    target_hit_rate: float,
     n_pilot: int = 2000,
     rng: np.random.Generator | None = None,
 ) -> tuple[float, float]:
     """
-    Find threshold T such that P(true_count + Lap(1/ε) ≥ T) ≈ target_q.
+    Find threshold T such that the empirical noisy hit rate ≈ target_hit_rate.
 
-    Sets T at the (1−target_q) empirical quantile of the noisy count
-    distribution, so that exactly target_q fraction of pilot rounds produce a
-    noisy crossing. Passing this T and target_q to the TCT accountant ensures
-    the accountant's q parameter matches the mechanism's actual hit probability.
+    Sets T at the (1 − target_hit_rate) quantile of the noisy count
+    distribution (true_count + Lap(1/ε)), so that approximately target_hit_rate
+    fraction of rounds produce a crossing.
+
+    This is an application-level choice — T controls HOW OFTEN the threshold
+    is crossed. It is independent of q, which is fixed by epsilon alone.
+
+    For TCT to be beneficial, set target_hit_rate << q_from_epsilon(epsilon).
+    For example, with epsilon=0.1 (q≈0.475), a target_hit_rate of 0.05–0.10
+    means ~90–95% of rounds output ⊥ and pay nothing under TCT.
 
     Args:
-        population:  the user population whose conversion rates govern true counts
-        epsilon:     the Laplace mechanism's ε (noise scale = 1/ε)
-        target_q:    desired empirical hit rate in (0, 1)
-        n_pilot:     number of pilot rounds used to estimate the quantile
-        rng:         seeded generator; creates a fresh one if None
+        population:       user population whose conversion rates govern counts
+        epsilon:          Laplace mechanism ε (noise scale = 1/ε)
+        target_hit_rate:  desired fraction of rounds where noisy_count ≥ T
+        n_pilot:          number of pilot rounds used to estimate the quantile
+        rng:              seeded generator; creates a fresh one if None
 
     Returns:
-        threshold:    T — the noisy-count threshold to pass to SimulationEnvironment
-        q_empirical:  fraction of pilot rounds where noisy_count ≥ T (≈ target_q)
+        threshold:          T to pass to SimulationEnvironment
+        empirical_hit_rate: fraction of pilot rounds where noisy_count ≥ T
     """
     if rng is None:
         rng = np.random.default_rng()
-    if not 0 < target_q < 1:
-        raise ValueError(f"target_q must be in (0, 1), got {target_q}")
+    if not 0 < target_hit_rate < 1:
+        raise ValueError(f"target_hit_rate must be in (0, 1), got {target_hit_rate}")
     if epsilon <= 0:
         raise ValueError(f"epsilon must be positive, got {epsilon}")
 
@@ -77,6 +111,6 @@ def calibrate_threshold(
         noise = rng.laplace(0.0, 1.0 / epsilon)
         noisy_counts[i] = true_count + noise
 
-    threshold = float(np.quantile(noisy_counts, 1.0 - target_q))
-    q_empirical = float(np.mean(noisy_counts >= threshold))
-    return threshold, q_empirical
+    threshold = float(np.quantile(noisy_counts, 1.0 - target_hit_rate))
+    empirical_hit_rate = float(np.mean(noisy_counts >= threshold))
+    return threshold, empirical_hit_rate

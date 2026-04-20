@@ -13,11 +13,23 @@ epsilon-DP Laplace mechanism costs epsilon in privacy, so the total cost for
 K_k compositions is K_k * epsilon. Algorithm 8's `∆cost` is therefore
 (K_i - K_{i-1}) * epsilon.
 
+Note on q (Lemma 2.3 of Cohen & Lyu 2023):
+  For the Laplace threshold mechanism with ⊥ = FALSE (below threshold),
+  the NotPrior target ⊤ = {TRUE} is always a 1/(e^ε + 1)-target for any
+  ε-DP algorithm — regardless of the threshold T or the data distribution.
+  Therefore q is determined solely by epsilon:
+
+      q = 1 / (e^ε + 1)
+
+  This is NOT the empirical hit rate (fraction of rounds that cross T).
+  The threshold T is set independently based on application requirements.
+  TCT is beneficial when most rounds output ⊥ (empirical hit rate << q).
+
 Note on Algorithm 5 vs Algorithm 8: Algorithm 5 gives a simplified formula
-R = (alpha_i - alpha_{i-1}) / (Fx.cx / q) * epsilon. This does not telescope
-cleanly to C_i = K_i * epsilon, which is required by the Theorem 5 proof
-("after the i-th hit the filter has charged exactly C_i units"). Algorithm 8
-is the general statement and is what we implement here.
+R = (alpha_i - alpha_{i-1}) / (Fx.cx / q) * epsilon. Because alpha is
+decreasing, this yields negative charges — a bug in the paper. Algorithm 8
+computes the increment as (K_i - K_{i-1}) * epsilon, which telescopes
+correctly to C_i = K_i * epsilon as required by the Theorem 5 proof.
 """
 
 import math
@@ -29,6 +41,11 @@ from .base import PrivacyAccountant
 class AdaptiveTCTAccountant(PrivacyAccountant):
     """
     Adaptive TCT accountant with IDP filters (Algorithms 4–8, Theorem 3).
+
+    q is derived from epsilon via Lemma 2.3 (NotPrior target):
+        q = 1 / (e^epsilon + 1)
+    This is a universal lower bound on the hit probability in the private
+    branch of any epsilon-DP mechanism, independent of threshold or data.
 
     Charging structure per user:
       - First participation (cx = 0): RegisterForTCT charges K_1 * epsilon
@@ -43,25 +60,23 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
     bounds the actual privacy loss K_k * epsilon with high probability.
 
     Args:
-        epsilon:    per-query privacy parameter for the Laplace mechanism
+        epsilon:    per-query privacy parameter for the Laplace mechanism;
+                    also determines q = 1 / (e^epsilon + 1)
         delta:      total TCT failure probability (delta_infinity = delta);
                     this is the system-level parameter from Theorem 3, not
                     the user's initial budget
-        q:          lower bound on the hit probability in the private branch
-                    of the TCT mechanism (Definition 1)
     """
 
-    def __init__(self, epsilon: float, delta: float, q: float):
+    def __init__(self, epsilon: float, delta: float):
         if epsilon <= 0:
             raise ValueError(f"epsilon must be positive, got {epsilon}")
         if not 0 < delta < 1:
             raise ValueError(f"delta must be in (0, 1), got {delta}")
-        if not 0 < q <= 1:
-            raise ValueError(f"q must be in (0, 1], got {q}")
 
         self.epsilon = epsilon
         self.delta = delta
-        self.q = q
+        # Lemma 2.3 (NotPrior target): q = 1 / (e^epsilon + 1)
+        self.q = 1.0 / (math.exp(epsilon) + 1.0)
 
         # Per-user state: cx maps user_id -> prepaid hit count (Fx.cx in paper).
         # cx = 0: not yet registered.
@@ -116,13 +131,6 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
         Charges K_1 * epsilon from the user's epsilon budget and the full
         system delta from the user's delta budget (pre-paying delta_infinity).
         Sets cx = 1.
-
-        Corresponds to Algorithm 4 lines 3–9:
-          delta_1 = 6/pi^2 * delta
-          alpha   = alpha(1)
-          R       = (1 + alpha) / q * epsilon  [= K_1 * epsilon]
-          FilterCheckAndUpdate(Fx, R, delta)
-          Fx.cx = 1
         """
         k1 = self.compositions(1)
         self._cx[user.user_id] = 1
@@ -130,20 +138,14 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
 
     def _charge_hit(self, user: User) -> tuple[float, float]:
         """
-        ChargeTargetHit (Algorithms 5/8): incremental charge on each hit.
+        ChargeTargetHit (Algorithm 8): incremental charge on each hit.
 
         Extends prepaid budget from K_cx to K_{cx+1} compositions.
         Delta cost is 0 (delta is fully pre-paid at registration).
 
-        Corresponds to Algorithm 8 lines 2–8:
-          Ki   = compositions(cx + 1)
-          Ki_1 = compositions(cx)
-          cost = (Ki - Ki_1) * epsilon       [pure DP linear composition]
-          FilterCheckAndUpdate(Fx, cost, 0)
-          Fx.cx += 1
-
-        The telescoping property guarantees that after k actual hits, total
-        epsilon charged = K_{k+1} * epsilon (Theorem 5 proof).
+        Implements Algorithm 8 (not Algorithm 5, which has a sign error):
+          cost = (K_{cx+1} - K_cx) * epsilon
+        This telescopes correctly to K_{k+1} * epsilon after k hits.
         """
         cx = self._cx[user.user_id]
         k_next = self.compositions(cx + 1)
@@ -176,13 +178,11 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
         eps_cost = 0.0
         delta_cost = 0.0
 
-        # Step 1: RegisterForTCT — first time this user encounters a TCT query
         if self._cx.get(user.user_id, 0) == 0:
             r_eps, r_delta = self._register(user)
             eps_cost += r_eps
             delta_cost += r_delta
 
-        # Step 2: ChargeTargetHit — top round and this user contributed
         if is_top and contributed:
             h_eps, h_delta = self._charge_hit(user)
             eps_cost += h_eps
