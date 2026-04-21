@@ -1,24 +1,12 @@
 """
 Threshold calibration and q computation for the TCT simulation.
 
-Key distinction
----------------
-q and T are INDEPENDENT quantities:
-
   q = 1 / (e^ε + 1)          (Lemma 2.3, Cohen & Lyu 2023)
 
     q is a property of the ε-DP mechanism alone. For the Laplace threshold
     mechanism, the NotPrior target ⊤ = {TRUE} is always a 1/(e^ε+1)-target,
     regardless of the threshold T or the data distribution. Use q_from_epsilon
     to compute it.
-
-  T = set_threshold_for_hit_rate(...)
-
-    T controls what fraction of rounds produce a target hit (the empirical
-    hit rate). This is an application-level choice, NOT related to q.
-    TCT is beneficial when the empirical hit rate << q — i.e., when most
-    rounds output FALSE (⊥). set_threshold_for_hit_rate finds the T that
-    achieves a desired empirical noisy hit rate on the actual population.
 
 Usage
 -----
