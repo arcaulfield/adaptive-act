@@ -9,7 +9,7 @@ class PrivacyAccountant(ABC):
 
     An accountant determines how much (epsilon, delta) budget to charge each
     user per round. Different accountants encode different privacy analyses:
-    - StandardIDPAccountant: charges epsilon per round unconditionally.
+    - StandardDPAccountant: charges epsilon per round unconditionally.
     - AdaptiveTCTAccountant (Step 2): charges based on target hits and the
       dynamic alpha schedule (Theorem 3 / Algorithms 4-8).
 
@@ -38,6 +38,10 @@ class PrivacyAccountant(ABC):
             round_num: zero-based round index
         """
         ...
+
+    def hit_count(self, user_id: int) -> int:
+        """Number of target hits recorded for this user. Override in TCT accountants."""
+        return 0
 
     def on_round_end(
         self,

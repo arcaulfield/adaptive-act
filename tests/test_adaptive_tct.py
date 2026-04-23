@@ -7,7 +7,7 @@ Organised into:
   3. Hit charging (ChargeTargetHit)
   4. Full charge() logic (combining registration + hit charging)
   5. Telescoping / budget correctness
-  6. Comparison against StandardIDPAccountant (TCT cheaper when empirical hit rate << q)
+  6. Comparison against StandardDPAccountant (TCT cheaper when empirical hit rate << q)
   7. Input validation
 """
 
@@ -17,7 +17,7 @@ import numpy as np
 import pytest
 
 from simulation.accountants.adaptive_tct import AdaptiveTCTAccountant
-from simulation.accountants.standard_idp import StandardIDPAccountant
+from simulation.accountants.standard_dp import StandardDPAccountant
 from simulation.calibration import q_from_epsilon
 from simulation.datasets import PopulationConfig, generate_synthetic_population
 from simulation.environment import SimulationEnvironment
@@ -345,7 +345,7 @@ class TestTCTAdvantage:
         """
         eps_budget = self.N_ROUNDS * self.EPSILON  # = 30.0
 
-        idp = StandardIDPAccountant(epsilon_per_round=self.EPSILON)
+        idp = StandardDPAccountant(epsilon_per_round=self.EPSILON)
         tct = AdaptiveTCTAccountant(epsilon=self.EPSILON, delta=self.DELTA)
 
         r_idp = self._simulate(idp, eps_budget=eps_budget)
@@ -362,7 +362,7 @@ class TestTCTAdvantage:
         """
         eps_budget = 200.0
 
-        idp = StandardIDPAccountant(epsilon_per_round=self.EPSILON)
+        idp = StandardDPAccountant(epsilon_per_round=self.EPSILON)
         tct = AdaptiveTCTAccountant(epsilon=self.EPSILON, delta=self.DELTA)
 
         r_idp = self._simulate(idp, eps_budget=eps_budget)

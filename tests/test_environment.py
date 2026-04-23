@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from simulation.population import User, UserPopulation
-from simulation.accountants.standard_idp import StandardIDPAccountant
+from simulation.accountants.standard_dp import StandardDPAccountant
 from simulation.environment import SimulationEnvironment
 from simulation.records import SimulationResult
 
@@ -39,7 +39,7 @@ def make_env(
 ) -> SimulationEnvironment:
     return SimulationEnvironment(
         population=population,
-        accountant=StandardIDPAccountant(epsilon_per_round=epsilon_per_round),
+        accountant=StandardDPAccountant(epsilon_per_round=epsilon_per_round),
         threshold=threshold,
         query_epsilon=epsilon_per_round,
         num_rounds=num_rounds,

@@ -60,14 +60,22 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
     bounds the actual privacy loss K_k * epsilon with high probability.
 
     Args:
-        epsilon:    per-query privacy parameter for the Laplace mechanism;
-                    also determines q = 1 / (e^epsilon + 1)
-        delta:      total TCT failure probability (delta_infinity = delta);
-                    this is the system-level parameter from Theorem 3, not
-                    the user's initial budget
+        epsilon:     per-query privacy parameter for the Laplace mechanism;
+                     also determines q = 1 / (e^epsilon + 1)
+        delta:       total TCT failure probability (delta_infinity = delta);
+                     this is the system-level parameter from Theorem 3, not
+                     the user's initial budget
+        independent: if True (default), ChargeTargetHit is applied only to
+                     users who individually contributed to the top
+                     (contributed=True).  Privacy cost concentrates on heavy
+                     contributors.
+                     If False, ChargeTargetHit is applied to every registered
+                     user whenever any top occurs, regardless of individual
+                     contribution.  More conservative; analogous to treating
+                     the threshold crossing as a group event.
     """
 
-    def __init__(self, epsilon: float, delta: float):
+    def __init__(self, epsilon: float, delta: float, independent: bool = True):
         if epsilon <= 0:
             raise ValueError(f"epsilon must be positive, got {epsilon}")
         if not 0 < delta < 1:
@@ -75,6 +83,7 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
 
         self.epsilon = epsilon
         self.delta = delta
+        self.independent = independent
         # Lemma 2.3 (NotPrior target): q = 1 / (e^epsilon + 1)
         self.q = 1.0 / (math.exp(epsilon) + 1.0)
 
@@ -173,7 +182,13 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
 
         Both can happen in the same round (user's first round is also a hit).
         Non-top rounds cost zero after registration — this is the key
-        efficiency advantage of TCT over standard IDP composition.
+        efficiency advantage of TCT over standard DP composition.
+
+        Independent mode (default): ChargeTargetHit fires only when this user
+        personally contributed to the top.  Cost concentrates on heavy hitters.
+
+        Non-independent mode: ChargeTargetHit fires for every registered user
+        whenever any top occurs, regardless of individual contribution.
         """
         eps_cost = 0.0
         delta_cost = 0.0
@@ -183,7 +198,7 @@ class AdaptiveTCTAccountant(PrivacyAccountant):
             eps_cost += r_eps
             delta_cost += r_delta
 
-        if is_top and contributed:
+        if is_top and (contributed or not self.independent):
             h_eps, h_delta = self._charge_hit(user)
             eps_cost += h_eps
             delta_cost += h_delta
