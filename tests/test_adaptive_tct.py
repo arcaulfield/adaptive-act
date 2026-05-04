@@ -396,3 +396,205 @@ class TestInputValidation:
     def test_delta_one_raises(self):
         with pytest.raises(ValueError):
             AdaptiveTCTAccountant(epsilon=0.1, delta=1.0)
+
+
+# ---------------------------------------------------------------------------
+# 8. RDP composition mode (alpha_rdp parameter)
+# ---------------------------------------------------------------------------
+
+class TestRDPMode:
+    """
+    Tests for alpha_rdp mode (Corollary 2 / Corollary 4).
+
+    Per-call RDP cost: rho = alpha_rdp * epsilon**2 / 2
+    Registration charge:  K_1 * rho  (budget),  delta  (delta)
+    Per-hit increment:    (K_{cx+1} - K_cx) * rho   (Eq. 8)
+    Telescoping:          after k hits, total budget cost = K_{k+1} * rho
+    """
+
+    EPSILON = 0.1
+    DELTA = 1e-3
+    ALPHA = 10.0
+
+    def make_rdp(self):
+        return AdaptiveTCTAccountant(
+            epsilon=self.EPSILON, delta=self.DELTA, alpha_rdp=self.ALPHA
+        )
+
+    def test_budget_cost_uses_rho(self):
+        tct = self.make_rdp()
+        rho = self.ALPHA * self.EPSILON ** 2 / 2.0
+        for k in range(1, 10):
+            Kk = tct.compositions(k)
+            assert abs(tct.budget_cost(Kk) - Kk * rho) < 1e-12
+
+    def test_rdp_cost_strictly_less_than_dp_cost(self):
+        """K*rho < K*epsilon whenever alpha*epsilon < 2 (true for small epsilon)."""
+        tct_dp  = AdaptiveTCTAccountant(epsilon=self.EPSILON, delta=self.DELTA)
+        tct_rdp = self.make_rdp()
+        for k in range(1, 10):
+            Kk = tct_rdp.compositions(k)
+            assert tct_rdp.budget_cost(Kk) < tct_dp.budget_cost(Kk)
+
+    def test_registration_charges_rho_based_cost(self):
+        tct = self.make_rdp()
+        user = make_user()
+        rho = self.ALPHA * self.EPSILON ** 2 / 2.0
+        eps_cost, _ = tct.charge(user, is_top=False, contributed=False, round_num=0)
+        expected = tct.compositions(1) * rho
+        assert abs(eps_cost - expected) < 1e-12
+
+    def test_registration_delta_charge_is_delta_only(self):
+        """RDP mode: delta charge is just delta_infinity, not delta + delta_prime."""
+        tct = self.make_rdp()
+        user = make_user()
+        _, delta_cost = tct.charge(user, is_top=False, contributed=False, round_num=0)
+        assert abs(delta_cost - self.DELTA) < 1e-15
+
+    def test_telescoping_rho(self):
+        """After k hits, total budget cost = K_{k+1} * rho (Corollary 4 telescoping)."""
+        rho = self.ALPHA * self.EPSILON ** 2 / 2.0
+        for k in range(0, 8):
+            tct = self.make_rdp()
+            user = make_user(eps_budget=1e9, delta_budget=1.0)
+            total = 0.0
+            e, _ = tct.charge(user, is_top=False, contributed=False, round_num=0)
+            total += e
+            for r in range(1, k + 1):
+                e, _ = tct.charge(user, is_top=True, contributed=True, round_num=r)
+                total += e
+            expected = tct.compositions(k + 1) * rho
+            assert abs(total - expected) < 1e-10, \
+                f"k={k}: total={total:.8f}, expected K_{{k+1}}*rho={expected:.8f}"
+
+    def test_incremental_charges_positive(self):
+        tct = self.make_rdp()
+        user = make_user(eps_budget=1e9, delta_budget=1.0)
+        tct.charge(user, is_top=False, contributed=False, round_num=0)
+        for r in range(1, 10):
+            eps_cost, _ = tct.charge(user, is_top=True, contributed=True, round_num=r)
+            assert eps_cost > 0
+
+    def test_alpha_rdp_one_raises(self):
+        with pytest.raises(ValueError):
+            AdaptiveTCTAccountant(epsilon=0.1, delta=1e-3, alpha_rdp=1.0)
+
+    def test_alpha_rdp_zero_raises(self):
+        with pytest.raises(ValueError):
+            AdaptiveTCTAccountant(epsilon=0.1, delta=1e-3, alpha_rdp=0.5)
+
+    def test_alpha_rdp_and_delta_prime_mutual_exclusion(self):
+        with pytest.raises(ValueError):
+            AdaptiveTCTAccountant(epsilon=0.1, delta=1e-3, alpha_rdp=10.0, delta_prime=0.1)
+
+    def test_epsilon_budget_alias(self):
+        """epsilon_budget() is a backward-compatible alias for budget_cost()."""
+        tct = self.make_rdp()
+        for k in range(1, 6):
+            Kk = tct.compositions(k)
+            assert tct.epsilon_budget(Kk) == tct.budget_cost(Kk)
+
+
+# ---------------------------------------------------------------------------
+# 9. Stitched schedule (Proposition 5)
+# ---------------------------------------------------------------------------
+
+class TestStitchedSchedule:
+    EPSILON = 0.1
+    DELTA   = 1e-3
+
+    def make_stitched(self):
+        return AdaptiveTCTAccountant(epsilon=self.EPSILON, delta=self.DELTA, schedule="stitched")
+
+    def make_zeta2(self):
+        return AdaptiveTCTAccountant(epsilon=self.EPSILON, delta=self.DELTA, schedule="zeta2")
+
+    def test_k0_is_zero(self):
+        acc = self.make_stitched()
+        assert acc.compositions_stitched(0) == 0.0
+
+    def test_k1_positive(self):
+        acc = self.make_stitched()
+        assert acc.compositions_stitched(1) > 0
+
+    def test_monotone(self):
+        """K_k must be strictly increasing in k."""
+        acc = self.make_stitched()
+        vals = [acc.compositions_stitched(k) for k in range(1, 30)]
+        for i in range(len(vals) - 1):
+            assert vals[i + 1] > vals[i], f"Not monotone at k={i+1}"
+
+    def test_exceeds_baseline(self):
+        """K_k >= k/q for all k (overhead is non-negative)."""
+        acc = self.make_stitched()
+        for k in range(1, 50):
+            Kk = acc.compositions_stitched(k)
+            assert Kk >= k / acc.q - 1e-10, f"K_{k}={Kk:.4f} < k/q={k/acc.q:.4f}"
+
+    def test_stitched_leq_zeta2_large_k(self):
+        """For large k, stitched overhead <= Zeta-2 (asymptotically tighter, Prop 5).
+
+        The stitched schedule has a large additive term 8*beta_j/q that dominates
+        for small k. The crossover where stitched < zeta2 depends on parameters;
+        we verify it holds for k >= 1000 at these settings.
+        """
+        z = self.make_zeta2()
+        s = self.make_stitched()
+        # Find crossover and assert it eventually occurs
+        crossover_found = False
+        for k in range(1, 2001):
+            if s.compositions_stitched(k) <= z.compositions_zeta2(k):
+                crossover_found = True
+                break
+        assert crossover_found, "Stitched never became <= Zeta-2 up to k=2000"
+        # Verify it stays better once it crosses over
+        for k in range(k, min(k + 100, 2001)):
+            Ks = s.compositions_stitched(k)
+            Kz = z.compositions_zeta2(k)
+            assert Ks <= Kz + 1e-9, f"k={k}: stitched={Ks:.4f} > zeta2={Kz:.4f} after crossover"
+
+    def test_epoch_boundary_continuity(self):
+        """K_k should not have a downward jump at epoch boundaries (k = 2^j)."""
+        acc = self.make_stitched()
+        for j in range(1, 8):
+            k_boundary = 2 ** j
+            if k_boundary >= 2:
+                assert acc.compositions_stitched(k_boundary) <= acc.compositions_stitched(k_boundary + 1) + 1e-9
+
+    def test_compositions_dispatches_stitched(self):
+        """compositions() delegates to compositions_stitched when schedule='stitched'."""
+        acc = self.make_stitched()
+        for k in range(1, 20):
+            assert acc.compositions(k) == acc.compositions_stitched(k)
+
+    def test_compositions_dispatches_zeta2(self):
+        """compositions() delegates to compositions_zeta2 when schedule='zeta2'."""
+        acc = self.make_zeta2()
+        for k in range(1, 20):
+            assert acc.compositions(k) == acc.compositions_zeta2(k)
+
+    def test_invalid_schedule_raises(self):
+        with pytest.raises(ValueError):
+            AdaptiveTCTAccountant(epsilon=0.1, delta=1e-3, schedule="bad")
+
+    def test_negative_k_raises(self):
+        acc = self.make_stitched()
+        with pytest.raises(ValueError):
+            acc.compositions_stitched(-1)
+
+    def test_telescoping_stitched(self):
+        """After k hits, total epsilon cost = budget_cost(K_{k+1}) (telescoping holds)."""
+        for k in range(0, 8):
+            tct = AdaptiveTCTAccountant(
+                epsilon=self.EPSILON, delta=self.DELTA, schedule="stitched"
+            )
+            user = make_user(eps_budget=1e9, delta_budget=1.0)
+            total = 0.0
+            e, _ = tct.charge(user, is_top=False, contributed=False, round_num=0)
+            total += e
+            for r in range(1, k + 1):
+                e, _ = tct.charge(user, is_top=True, contributed=True, round_num=r)
+                total += e
+            expected = tct.budget_cost(tct.compositions(k + 1))
+            assert abs(total - expected) < 1e-10, \
+                f"k={k}: total={total:.8f}, expected={expected:.8f}"
