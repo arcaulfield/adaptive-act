@@ -67,7 +67,6 @@ notebooks/                   Paper figure notebooks — run these to reproduce a
 
 figures/                     Pre-generated figures (committed for reviewer convenience)
 tests/                       Unit tests for the simulation package
-ProjectDocumentation/        Paper drafts, evaluation plan, and figure manifest
 ```
 
 ## Running Tests

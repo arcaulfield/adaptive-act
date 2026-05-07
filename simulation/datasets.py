@@ -7,11 +7,6 @@ heavy right tail representing the small fraction of highly active users. Because
 rates live in [0, 1] by construction, no capping is needed and each user
 contributes at most 1 conversion per round, keeping query sensitivity = 1.
 
-Suggested parameter presets (tune further in Step 3 pilot sweep):
-  SPARSE_ATTRIBUTION   = PopulationConfig(alpha=0.3, beta=3.0, ...)
-    mean rate ≈ 0.09 — most users inactive; clear TCT advantage regime
-  MODERATE_ATTRIBUTION = PopulationConfig(alpha=0.5, beta=2.0, ...)
-    mean rate ≈ 0.20 — more active population; smaller but visible TCT advantage
 """
 
 from dataclasses import dataclass

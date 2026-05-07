@@ -18,22 +18,6 @@ Positive root of this quadratic (Remark B.5 rearranged):
 
 This is the minimum α (and therefore minimum K_τ) compatible with failure
 probability δ.  Requires τ fixed upfront; cannot adaptively stop early.
-
-How this differs from AdaptiveTCTAccountant
---------------------------------------------
-Adaptive TCT uses the Zeta-2 allocation to split δ across all k ≥ 1:
-
-    δ_k = 6/(π²k²) · δ   →   larger β_k   →   larger α_k   →   larger K_k
-
-This supports an *anytime* guarantee: the bound K_k holds simultaneously for
-every k without knowing τ upfront.  The cost is a higher overhead factor.
-
-Standard TCT uses the full δ budget for the single predetermined target τ:
-
-    β = ln(1/δ)   →   smaller β   →   smaller α   →   smaller K_τ
-
-Cost comparison (same ε, δ, τ):
-    K_τ^{standard} < K_{τ+1}^{adaptive}
 """
 
 from __future__ import annotations
